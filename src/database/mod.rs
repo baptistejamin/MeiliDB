@@ -37,7 +37,11 @@ pub fn retrieve_data_index<D>(snapshot: &Snapshot<D>) -> Result<PositiveBlob, Bo
 where D: Deref<Target=DB>
 {
     match snapshot.get(DATA_INDEX)? {
-        Some(vector) => Ok(bincode::deserialize(&*vector)?),
+        Some(vector) => {
+            let bytes_len = vector.as_ref().len();
+            let bytes = Arc::new(vector.as_ref().to_vec());
+            Ok(PositiveBlob::from_shared_bytes(bytes, 0, bytes_len)?)
+        },
         None => Ok(PositiveBlob::default()),
     }
 }
@@ -172,18 +176,31 @@ fn merge_indexes(key: &[u8], existing_value: Option<&[u8]>, operands: &mut Merge
     };
 
     let mut op = blob::OpBuilder::with_capacity(capacity);
-    if let Some(existing_value) = existing_value {
-        let blob = bincode::deserialize(existing_value).expect("BUG: could not deserialize data-index");
+    if let Some(bytes) = existing_value {
+        let bytes_len = bytes.len();
+        let bytes = Arc::new(bytes.to_vec());
+        let blob = match PositiveBlob::from_shared_bytes(bytes, 0, bytes_len) {
+            Ok(blob) => blob,
+            Err(e) => panic!("BUG: could not deserialize data-index due to {}", e),
+        };
         op.push(Blob::Positive(blob));
     }
 
     for bytes in operands {
-        let blob = bincode::deserialize(bytes).expect("BUG: could not deserialize blob");
+        let bytes_len = bytes.len();
+        let bytes = Arc::new(bytes.to_vec());
+        let blob = match Blob::from_shared_bytes(bytes, 0, bytes_len) {
+            Ok(blob) => blob,
+            Err(e) => panic!("BUG: could not deserialize blob due to {}", e),
+        };
         op.push(blob);
     }
 
     let blob = op.merge().expect("BUG: could not merge blobs");
-    bincode::serialize(&blob).expect("BUG: could not serialize merged blob")
+
+    let mut bytes = Vec::new();
+    blob.write_to_bytes(&mut bytes);
+    bytes
 }
 
 #[cfg(test)]
